@@ -1,0 +1,35 @@
+{
+ "format": 1,
+ "feature_names": [
+  "cell_share",
+  "cell_lead",
+  "resources",
+  "score_margin",
+  "income_here",
+  "owned_deposit",
+  "garrison",
+  "exposed",
+  "attack_options",
+  "expandable",
+  "upgrade_early",
+  "late_resources"
+ ],
+ "weights": [
+  1.4102786082890313,
+  2.111456222157845,
+  0.7379777998775418,
+  10.0,
+  0.43572429418941605,
+  -0.4774185262052452,
+  1.6125705820444698,
+  -2.241157171925389,
+  1.495186668313097,
+  -1.4940109796790995,
+  1.432042839334696,
+  -0.6226269526663263
+ ],
+ "model_id": "d5e404a5",
+ "meta": {
+  "games_trained": 3000
+ }
+}

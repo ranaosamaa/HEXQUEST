@@ -68,6 +68,7 @@ namespace HexQuest
     [Serializable]
     public class ActionRequest
     {
+        public string type = "ACTION";   // message tag used by the real server
         public string match_id;
         public int turn_id;
         public int player_id;
@@ -96,5 +97,9 @@ namespace HexQuest
         public int board_radius = 4;    // 4 -> 61 cells, 5 -> 91 cells
         public int rounds = 40;
         public int map_seed = 12345;
+
+        // Real server only: controller for seat 2, 3, ... (seat 1 is you).
+        // Examples: "planner", "greedy", "random", "planner:rollouts=50,horizon=4"
+        public List<string> agents = new List<string> { "planner", "greedy", "random", "greedy", "random" };
     }
 }

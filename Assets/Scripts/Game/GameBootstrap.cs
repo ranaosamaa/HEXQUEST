@@ -5,11 +5,16 @@ namespace HexQuest
 {
     /// <summary>
     /// The ONLY component you add to the scene by hand. On Play it builds the camera setup,
-    /// grid, HUD, mock server and controller, so there is no manual scene wiring to get wrong.
+    /// grid, HUD, connection and controller, so there is no manual scene wiring to get wrong.
     /// </summary>
     public class GameBootstrap : MonoBehaviour
     {
         [SerializeField] MatchConfig config = new MatchConfig();
+
+        [Header("Connection")]
+        [Tooltip("ON: play against the Python server (real rules + real agents). OFF: built-in mock.")]
+        [SerializeField] bool useRealServer = true;
+        [SerializeField] string serverUrl = "ws://127.0.0.1:8765/ws";
 
         void Start()
         {
@@ -32,14 +37,26 @@ namespace HexQuest
             if (FindFirstObjectByType<EventSystem>() == null)
                 new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
 
-            // World + UI + "server"
+            // Connection: the ONLY place that decides mock vs real server.
+            IGameConnection connection;
+            if (useRealServer)
+            {
+                var ws = new GameObject("ServerConnection").AddComponent<WebSocketGameConnection>();
+                ws.Url = serverUrl;
+                connection = ws;
+            }
+            else
+            {
+                connection = new GameObject("MockGameServer").AddComponent<MockGameServer>();
+            }
+
+            // World + UI
             var grid = new GameObject("HexGrid").AddComponent<HexGridView>();
             var hud = new GameObject("HUD").AddComponent<HudController>();
             hud.Build();
-            var server = new GameObject("MockGameServer").AddComponent<MockGameServer>();
 
             var controller = gameObject.AddComponent<GameController>();
-            controller.Init(server, grid, hud, camCtrl, cam, config);
+            controller.Init(connection, grid, hud, camCtrl, cam, config);
             controller.StartMatch();
         }
     }

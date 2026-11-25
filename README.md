@@ -1,106 +1,90 @@
 # HexQuest
 
-A turn-based competitive strategy game on a hexagonal map for 2–6 players, where every seat can be a human or an AI agent. Players expand territory, gather resources, reinforce garrisons and attack rivals over 40 rounds. The project is both a playable multiplayer game and an environment for comparing AI decision-making approaches (Random, Greedy, Planner, Adaptive and a self-learning Learner).
-
-This repository contains the **Unity client**. The authoritative rules engine, agents and training environment live in a separate backend (Python / FastAPI) that is planned for this project.
-
-## Status
-
-Early development. The client currently runs against a **mock server** that stands in for the real backend, so the game is playable locally with placeholder rules.
-
-| Area | State |
-|---|---|
-| Hex board rendering (61 or 91 cells) | Done |
-| HUD (turn order, resources, action bar, event feed, scoreboard) | Done |
-| Human play: Move, Claim, Reinforce, Attack, Gather, Upgrade, Pass | Done (mock rules) |
-| Mock server with random agent seats | Done (temporary) |
-| Lobby and main menu scenes | Planned |
-| WebSocket connection to the real server | Planned |
-| Seat takeover and handback, reconnect | Planned |
-| Replay viewer and agent inspector | Planned |
-| Event animations, blocked-cell and resource-shift events | Planned |
-
-## Requirements
-
-- Unity 6 LTS (created from the **Universal 2D** template)
-- Git
-- Project setting: **Edit → Project Settings → Player → Other Settings → Active Input Handling = Both**
-
-## Getting started
-
-1. Clone the repository:
-   ```
-   git clone https://github.com/USERNAME/REPO.git
-   ```
-2. Open the folder in Unity Hub (Add → select the project folder) using Unity 6 LTS.
-3. Set **Active Input Handling** to **Both** (see above) and restart the editor.
-4. Open `Assets/Scenes/SampleScene`.
-5. Make sure the scene has an empty GameObject with the **GameBootstrap** component. Add one if it is missing.
-6. Press **Play**.
-
-## Controls
-
-| Input | Action |
-|---|---|
-| `1`–`6` | Choose Move, Claim, Reinforce, Attack, Gather, Upgrade |
-| Click a highlighted hex | Apply the chosen action |
-| Click an attack target twice | Confirm an attack |
-| `Space` | Pass |
-| `Esc` | Cancel the current selection |
-| Right or middle mouse drag, `WASD` | Pan the camera |
-| Mouse wheel | Zoom |
-
-## Project structure
+Turn-based hex strategy for 2-6 players. A Unity client talks over WebSocket to a Python server
+that runs the authoritative rules engine and the AI agents (Random, Greedy, Planner, Learner).
 
 ```
-Assets/Scripts/
-├── Core/   HexCoord: axial hex maths, neighbours, distance, world <-> hex
-├── Data/   Models: STATE / ACTION / RESULT message classes (pure data)
-├── Net/    IGameConnection, MockGameServer (temporary stand-in for the backend)
-├── View/   HexGridView, CellView, LeaderView, CameraController, Palette, ProceduralArt
-├── UI/     HudController, UIKit (HUD is built in code)
-└── Game/   GameController (client logic), GameBootstrap (scene entry point)
+<repo root>
+├── Assets/Scripts/      Unity client (C#)             -> see "Unity" below
+├── backend/             Python engine, agents, server, training
+│   ├── hexquest/        engine, agents/, learn/, server/
+│   ├── models/          learner_best.json (trained weights, commit this)
+│   └── tests/           54 tests
+├── Packages/ ProjectSettings/ ...                     (your Unity project, untouched)
+└── README.md
 ```
 
-## Architecture
+## One-time setup
 
-HexQuest uses a **server-authoritative** design:
+1. **Unity:** Unity 6 LTS, project from the *Universal 2D* template. Set
+   *Edit > Project Settings > Player > Other Settings > Active Input Handling = Both* and restart the editor.
+2. **Scene:** open `SampleScene`, create an Empty GameObject, add the **GameBootstrap** component.
+3. **Python 3.10+:**
+   ```
+   cd backend
+   python -m venv .venv
+   .venv\Scripts\activate          # Windows;  macOS/Linux: source .venv/bin/activate
+   pip install -r requirements.txt -r requirements-dev.txt
+   ```
 
-- The server is the only component that changes match state or decides whether an action is legal.
-- The Unity client displays the latest `STATE` message, offers only the actions the server lists as legal, and sends the chosen `ACTION` back.
-- Animation is cosmetic and only plays after the server confirms a result.
-- Logical game data (`Models.cs`) is kept separate from GameObjects (`View/`).
-- All networking goes through `IGameConnection`. `MockGameServer` implements it today; a WebSocket implementation will replace it without changing the rest of the client.
+## Run the game (two terminals' worth of steps)
 
-## Game rules (current placeholders)
+1. **Start the server** (keep it running):
+   ```
+   cd backend
+   python -m uvicorn hexquest.server.app:app --port 8765
+   ```
+   Open http://127.0.0.1:8765/health - you should see `{"ok":true,...}`.
+2. **Press Play in Unity** with *Use Real Server* ticked on GameBootstrap
+   (URL `ws://127.0.0.1:8765/ws`).
 
-Numbers such as costs, gathering yield and combat resolution are placeholders in `MockGameServer` until the rules configuration is frozen.
+You play seat 1 ("You"); the other seats are controlled by the agents listed under
+**Match Config > Agents** on GameBootstrap. Examples (seat 2, seat 3, ...):
 
-- **Move:** move your leader to an adjacent, unoccupied cell.
-- **Claim:** spend resources to claim a neutral cell adjacent to your territory.
-- **Reinforce:** spend resources to add a garrison unit to an owned cell.
-- **Attack:** from an owned cell with at least 2 units, attack an adjacent enemy cell. Each side rolls one d6 per unit; the higher total wins and ties favour the defender.
-- **Gather:** collect resources from the cell your leader occupies.
-- **Upgrade:** spend resources to raise your gathering level.
-- **Pass:** do nothing.
-- **Scoring:** 10 points per owned cell plus 1 per unspent resource, after 40 rounds.
+| Agents list | Opponents |
+|---|---|
+| `planner`, `greedy` | strongest search agent + a Greedy |
+| `learner`, `greedy` | the trained Learner + a Greedy |
+| `learner`, `planner`, `random` | all kinds (set Player Count to 4) |
+| `planner:rollouts=30,horizon=4` | a faster, weaker Planner |
 
-## Roadmap
+No Python? Untick *Use Real Server* to use the built-in mock (random agents, placeholder rules).
 
-1. Freeze the rules configuration and message protocol.
-2. Lobby scene with human, agent and empty seats.
-3. `WebSocketGameConnection` against the real game service, with Newtonsoft JSON.
-4. Reconnect and snapshot recovery, seat takeover and handback, turn timers.
-5. Replay viewer, agent inspector, event animations.
-6. Final art pass to replace the procedurally generated meshes and sprites.
+Controls: `1`-`6` choose action, click a highlighted hex, `Space` pass, `Esc` cancel,
+right-drag / WASD pan, wheel zoom. Attacks need a second click to confirm.
 
-## Contributing
+## Agents without Unity (headless)
 
-- Work on a branch and open a pull request into `main`.
-- Do not commit `Library/`, `Temp/`, `Logs/`, `UserSettings/` or generated `.csproj` / `.sln` files. The `.gitignore` excludes them.
-- Always commit `.meta` files alongside their assets.
-- Keep game rules out of the client. If logic decides what is legal, it belongs on the server.
+```
+cd backend
+python -m pytest tests -q                                                    # all tests
+python -m hexquest.tournament --agents learner planner greedy random --games 40
+python -m hexquest.tournament --agents greedy random --games 200 --workers 4
+```
 
-## License
+## Train the Learner
 
-To be decided.
+```
+cd backend
+python -m hexquest.learn.trainer --games 3000       # ~3 min; writes models/learner_best.json
+python -m hexquest.learn.evaluate --model models/learner_best.json --games 400 --opponents greedy random
+```
+Restart the server afterwards so it reloads the new weights. If a new model is worse, restore the old
+`learner_best.json` from Git.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Unity feed says "Cannot reach server" | Server not running / wrong port. Start it, or untick *Use Real Server*. |
+| Mouse errors in the Console | Active Input Handling must be *Both*. |
+| `ModuleNotFoundError: hexquest` | Run Python commands from inside `backend/`. |
+| Agents too slow / too fast | `set HEXQUEST_AGENT_DELAY=0` (Windows) or `export HEXQUEST_AGENT_DELAY=0` before starting the server. |
+| Learner plays like Greedy | No `models/learner_best.json` found: run from `backend/` or set `HEXQUEST_MODEL`. |
+| WebGL build can't connect | `System.Net.WebSockets` is unsupported in WebGL; use desktop/mobile builds. |
+
+## Status and limits
+
+Rules numbers (costs, yields, combat) are placeholders in `backend/hexquest/rules.py` until frozen.
+Not built yet: lobby scene, reconnect/snapshot recovery, seat takeover/handback, replay viewer,
+agent inspector, multiple human seats, authentication.
