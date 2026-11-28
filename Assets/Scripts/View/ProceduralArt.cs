@@ -115,8 +115,8 @@ namespace HexQuest
             var tm = go.AddComponent<TextMesh>();
             tm.font = font;
             tm.text = text;
-            tm.fontSize = 64;
-            tm.characterSize = charSize;
+            tm.fontSize = 128;                 // rasterised large so world text stays crisp when zoomed
+            tm.characterSize = charSize * 0.5f; // same on-screen size as fontSize 64
             tm.anchor = TextAnchor.MiddleCenter;
             tm.alignment = TextAlignment.Center;
             tm.color = color;

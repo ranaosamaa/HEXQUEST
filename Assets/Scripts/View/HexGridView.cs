@@ -3,10 +3,7 @@ using UnityEngine;
 
 namespace HexQuest
 {
-    /// <summary>
-    /// Owns every CellView and LeaderView. Logical data lives in StateMessage;
-    /// this class only mirrors it onto GameObjects (proposal section 10).
-    /// </summary>
+    /// <summary>Owns every CellView and LeaderView. Logical data lives in StateMessage; this only mirrors it.</summary>
     public class HexGridView : MonoBehaviour
     {
         public const float HexSize = 1f;
@@ -15,35 +12,50 @@ namespace HexQuest
         readonly Dictionary<int, LeaderView> leaders = new Dictionary<int, LeaderView>();
         Font font;
 
-        public bool IsBuilt => cells.Count > 0;
+        public bool IsBuilt { get { return cells.Count > 0; } }
         public Bounds WorldBounds { get; private set; }
+
+        /// <summary>Stable cosmetic seed: the part of the match id before the first '-'.</summary>
+        public static int SaltFor(string matchId)
+        {
+            string key = matchId ?? "";
+            int dash = key.IndexOf('-');
+            if (dash > 0) key = key.Substring(0, dash);
+            unchecked
+            {
+                int h = 17;
+                foreach (char c in key) h = h * 31 + c;
+                return h & 0x7fffffff;
+            }
+        }
 
         public void Build(StateMessage s, Font uiFont)
         {
             Clear();
             font = uiFont;
-            Bounds b = default;
+            int salt = SaltFor(s.match_id);
+            Bounds b = default(Bounds);
             bool first = true;
             foreach (var c in s.cells)
             {
                 var go = new GameObject();
                 go.transform.SetParent(transform, false);
                 var view = go.AddComponent<CellView>();
-                view.Init(c.coord, font);
+                view.Init(c.coord, salt, font);
                 cells[c.coord] = view;
 
                 Vector3 p = c.coord.ToWorld(HexSize);
                 if (first) { b = new Bounds(p, Vector3.zero); first = false; }
                 else b.Encapsulate(p);
             }
-            b.Expand(new Vector3(2f, 2f, 0f));
+            b.Expand(new Vector3(2.4f, 2.8f, 0f));
             WorldBounds = b;
         }
 
         public void Clear()
         {
-            foreach (var kv in cells) if (kv.Value) Destroy(kv.Value.gameObject);
-            foreach (var kv in leaders) if (kv.Value) Destroy(kv.Value.gameObject);
+            foreach (var kv in cells) if (kv.Value != null) Destroy(kv.Value.gameObject);
+            foreach (var kv in leaders) if (kv.Value != null) Destroy(kv.Value.gameObject);
             cells.Clear();
             leaders.Clear();
         }
@@ -51,31 +63,35 @@ namespace HexQuest
         public void Refresh(StateMessage s, bool instant)
         {
             foreach (var c in s.cells)
-                if (cells.TryGetValue(c.coord, out var view))
-                    view.Refresh(c, ColorFor(c));
+            {
+                CellView view;
+                if (cells.TryGetValue(c.coord, out view)) view.Refresh(c);
+            }
 
             foreach (var p in s.players)
             {
-                if (!leaders.TryGetValue(p.player_id, out var lv))
+                LeaderView lv;
+                if (!leaders.TryGetValue(p.player_id, out lv))
                 {
                     var go = new GameObject();
                     go.transform.SetParent(transform, false);
                     lv = go.AddComponent<LeaderView>();
-                    lv.Init(p.player_id, font);
+                    lv.Init(p.player_id);
                     leaders[p.player_id] = lv;
                 }
                 lv.gameObject.SetActive(p.active);
+                lv.SetTurn(!s.game_over && s.active_player == p.player_id);
                 lv.SetTarget(WorldPosition(p.leader), instant);
             }
         }
 
-        static Color ColorFor(CellData c)
-        {
-            if (c.status == CellStatus.Blocked) return Palette.Blocked;
-            return c.owner >= 0 ? Palette.ForPlayer(c.owner) : Palette.Land;
-        }
+        public Vector3 WorldPosition(HexCoord c) { return (Vector3)c.ToWorld(HexSize); }
 
-        public Vector3 WorldPosition(HexCoord c) => (Vector3)c.ToWorld(HexSize);
+        public Vector3 LeaderPosition(int playerId, Vector3 fallback)
+        {
+            LeaderView lv;
+            return leaders.TryGetValue(playerId, out lv) && lv != null ? lv.transform.position : fallback;
+        }
 
         public bool TryPick(Vector2 world, out HexCoord coord)
         {
@@ -90,7 +106,8 @@ namespace HexQuest
 
         public void SetHighlight(HexCoord c, Highlight h)
         {
-            if (cells.TryGetValue(c, out var view)) view.SetHighlight(h);
+            CellView view;
+            if (cells.TryGetValue(c, out view)) view.SetHighlight(h);
         }
     }
 }

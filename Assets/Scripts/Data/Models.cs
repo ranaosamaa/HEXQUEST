@@ -88,6 +88,12 @@ namespace HexQuest
         public bool accepted;
         public string error;
         public string summary;
+        // Effects data (real server and mock fill these in)
+        public HexCoord target;     // cell the action touched
+        public int amount;          // e.g. resources gathered
+        public int roll_a;          // attack: attacker's dice total
+        public int roll_b;          // attack: defender's dice total
+        public bool won;            // attack: did the attacker capture the cell?
     }
 
     [Serializable]

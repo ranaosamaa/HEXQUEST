@@ -14,5 +14,6 @@ namespace HexQuest
         int LocalPlayerId { get; }
         void Connect(MatchConfig config);
         void SubmitAction(ActionRequest request);
+        void Disconnect();
     }
 }

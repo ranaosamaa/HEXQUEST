@@ -77,9 +77,28 @@ def state_message(s: GameState, match_id: str, names: List[str], controllers: Li
     }
 
 
-def result_message(actor: int, atype: int, accepted: bool, summary: str, error: str = "") -> dict:
+def result_message(actor: int, atype: int, accepted: bool, summary: str, error: str = "",
+                   target: Optional[dict] = None, amount: int = 0, roll_a: int = 0, roll_b: int = 0,
+                   won: bool = False) -> dict:
+    """RESULT message. target/amount/rolls/won feed the client's sound and visual effects."""
     return {"type": "RESULT", "actor": actor, "action_type": atype, "accepted": accepted,
-            "error": error, "summary": summary}
+            "error": error, "summary": summary, "target": target or {"q": 0, "r": 0},
+            "amount": amount, "roll_a": roll_a, "roll_b": roll_b, "won": won}
+
+
+def result_for_action(s_before: GameState, name: str, action: tuple, info, names: List[str]) -> dict:
+    """Accepted-action RESULT built from the state BEFORE the action was applied."""
+    atype, src, dst = action
+    actor = s_before.current
+    cell = dst if dst >= 0 else s_before.leader[actor]
+    amount = roll_a = roll_b = 0
+    won = False
+    if atype == GATHER:
+        amount = s_before.cfg.gather_base + s_before.level[actor] + s_before.deposit[s_before.leader[actor]]
+    elif atype == ATTACK and info:
+        roll_a, roll_b, won = info
+    return result_message(actor, atype, True, describe(s_before, name, action, info, names),
+                          target=_coord(s_before, cell), amount=amount, roll_a=roll_a, roll_b=roll_b, won=bool(won))
 
 
 def parse_action(msg: dict, s: GameState) -> Optional[tuple]:

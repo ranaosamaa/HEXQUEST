@@ -7,58 +7,81 @@ using UnityEngine.EventSystems;
 namespace HexQuest
 {
     /// <summary>
-    /// The client's brain. It NEVER changes game state: it shows the latest authoritative
-    /// StateMessage, lets the human pick one of the server's legal actions, and sends it back.
+    /// The client's brain during a match. It NEVER changes game state: it shows the latest authoritative
+    /// StateMessage, lets the human pick one of the server's legal actions, sends it back, and plays the
+    /// sounds and effects for results the server reports.
     /// </summary>
     public class GameController : MonoBehaviour
     {
+        public event Action<StateMessage> MatchFinished;
+        public event Action<string, bool> ConnectionProblem;     // message, hadState
+        public event Action PauseRequested;
+
+        public bool InputEnabled = true;
+
         IGameConnection conn;
         HexGridView grid;
         HudController hud;
         CameraController camCtrl;
         Camera cam;
-        MatchConfig config;
+        FxManager fx;
 
         StateMessage state;
-        ActionType? pending;          // action type chosen from the bar, waiting for a target click
-        HexCoord? attackTarget;       // first click on an attack target (second click confirms)
-        bool awaitingServer;
+        ActionType? pending;
+        HexCoord? attackTarget;
+        bool awaitingServer, finishedRaised;
+        int lastActive = -2;
+        string infoKind = "";
 
-        bool IsMyTurn => state != null && !state.game_over && state.active_player == conn.LocalPlayerId;
+        public bool HasPending { get { return pending.HasValue; } }
+        bool IsMyTurn { get { return conn != null && state != null && !state.game_over && state.active_player == conn.LocalPlayerId; } }
+        int Me { get { return conn != null ? conn.LocalPlayerId : 0; } }
 
-        public void Init(IGameConnection connection, HexGridView gridView, HudController hudController,
-                         CameraController cameraController, Camera camera, MatchConfig matchConfig)
+        public void Init(HexGridView gridView, HudController hudController, CameraController cameraController,
+                         Camera camera, FxManager effects)
         {
-            conn = connection; grid = gridView; hud = hudController;
-            camCtrl = cameraController; cam = camera; config = matchConfig;
-
-            conn.StateReceived += OnState;
-            conn.ResultReceived += OnResult;
-
+            grid = gridView; hud = hudController; camCtrl = cameraController; cam = camera; fx = effects;
             hud.ActionClicked += OnActionClicked;
             hud.PassClicked += SubmitPass;
             hud.CancelClicked += CancelSelection;
             hud.FocusClicked += FocusOnLeader;
             hud.StatsClicked += ShowStats;
             hud.SeatsClicked += ShowSeats;
-            hud.MenuClicked += ShowMenu;
-            hud.PanelButtonClicked += StartMatch;
         }
 
-        void OnDestroy()
+        public void BeginMatch(IGameConnection connection, MatchConfig cfg)
         {
-            if (conn == null) return;
-            conn.StateReceived -= OnState;
-            conn.ResultReceived -= OnResult;
-        }
-
-        public void StartMatch()
-        {
-            grid.Clear();
+            EndMatch();
+            conn = connection;
+            conn.StateReceived += OnState;
+            conn.ResultReceived += OnResult;
             hud.ClearFeed();
-            hud.HidePanel();
-            state = null; pending = null; attackTarget = null; awaitingServer = false;
-            conn.Connect(config);
+            hud.HideInfo();
+            hud.SetBanner("Summoning the realm...");
+            conn.Connect(cfg);
+        }
+
+        public void EndMatch()
+        {
+            if (conn != null)
+            {
+                conn.StateReceived -= OnState;
+                conn.ResultReceived -= OnResult;
+                conn.Disconnect();
+                conn = null;
+            }
+            if (grid != null) grid.Clear();
+            state = null; pending = null; attackTarget = null;
+            awaitingServer = false; finishedRaised = false; lastActive = -2;
+        }
+
+        void OnDestroy() { EndMatch(); }
+
+        /// <summary>Escape: cancel a half-made choice first, otherwise ask for the pause menu.</summary>
+        public void HandleEscape()
+        {
+            if (pending.HasValue || hud.InfoVisible) { CancelSelection(); hud.HideInfo(); return; }
+            if (PauseRequested != null) PauseRequested();
         }
 
         // =============================================================== messages from the server
@@ -78,26 +101,95 @@ namespace HexQuest
             }
             grid.Refresh(s, first);
             grid.ClearHighlights();
-            hud.Refresh(s, conn.LocalPlayerId, null);
+            hud.Refresh(s, Me, null);
 
-            if (s.game_over) { hud.SetBanner("Match over"); ShowGameOver(s); }
-            else if (IsMyTurn) hud.SetBanner("Your turn - pick an action");
-            else hud.SetBanner(s.players[s.active_player].name + " is thinking...");
+            if (s.game_over)
+            {
+                hud.SetBanner("The quest is over");
+                if (!finishedRaised)
+                {
+                    finishedRaised = true;
+                    if (MatchFinished != null) MatchFinished(s);
+                }
+            }
+            else if (IsMyTurn)
+            {
+                hud.SetBanner("Your turn - choose a deed", lastActive != Me);
+                if (lastActive != Me && !first) AudioManager.PlaySfx("turn", 0.8f, 0f);
+            }
+            else hud.SetBanner(s.players[s.active_player].name + " is plotting...");
+            lastActive = s.active_player;
         }
 
         void OnResult(ResultMessage r)
         {
-            hud.AddFeed(r.summary, !r.accepted);
-            if (!r.accepted) awaitingServer = false;
+            if (!r.accepted)
+            {
+                awaitingServer = false;
+                hud.AddFeed(r.summary, true);
+                if (r.error == "connection")
+                {
+                    if (ConnectionProblem != null) ConnectionProblem(r.summary, state != null);
+                }
+                else AudioManager.PlaySfx("error", 0.7f, 0f);
+                return;
+            }
+            hud.AddFeed("<color=#" + Palette.Hex(Palette.ForPlayer(r.actor)) + ">> </color>" + r.summary);
+            PlayEffects(r);
+        }
+
+        void PlayEffects(ResultMessage r)
+        {
+            if (!grid.IsBuilt) return;
+            Vector3 target = grid.WorldPosition(r.target);
+            Vector3 hero = grid.LeaderPosition(r.actor, target);
+            Color col = Palette.ForPlayer(r.actor);
+            Vector3 up = new Vector3(0f, 0.55f, 0f);
+            switch (r.action_type)
+            {
+                case ActionType.Move:
+                    AudioManager.PlaySfx("move", 0.8f);
+                    break;
+                case ActionType.Claim:
+                    AudioManager.PlaySfx("claim", 0.9f);
+                    fx.Ring(target, col);
+                    fx.FloatText(target + up, "Claimed", Palette.Cream, 0.9f);
+                    break;
+                case ActionType.Reinforce:
+                    AudioManager.PlaySfx("reinforce", 0.9f);
+                    fx.Spark(target, Palette.Gold, 1.2f);
+                    fx.FloatText(target + up, "+1 soldier", Palette.Gold, 0.9f);
+                    break;
+                case ActionType.Attack:
+                    AudioManager.PlaySfx("attack", 1f);
+                    AudioManager.PlaySfx(r.won ? "claim" : "block", 0.8f);
+                    fx.Slash(target, Color.white);
+                    if (r.won) fx.Ring(target, col, 0.5f, 2.8f, 0.8f);
+                    fx.FloatText(target + up, r.roll_a + "  vs  " + r.roll_b, Palette.Cream, 0.95f);
+                    fx.FloatText(target + up * 1.9f, r.won ? "Captured!" : "Repelled", r.won ? Palette.Gold : Palette.Danger, 1.15f);
+                    camCtrl.Shake(0.14f, 0.28f);
+                    break;
+                case ActionType.Gather:
+                    AudioManager.PlaySfx("gather", 0.9f);
+                    fx.CoinBurst(hero + up);
+                    fx.FloatText(hero + up * 1.7f, "+" + r.amount, Palette.Gold, 1.2f);
+                    break;
+                case ActionType.Upgrade:
+                    AudioManager.PlaySfx("upgrade", 0.9f);
+                    fx.Spark(hero + up, Palette.Good, 1.5f);
+                    fx.FloatText(hero + up * 1.9f, "Level up!", Palette.Good, 1.1f);
+                    break;
+                default:
+                    AudioManager.PlaySfx("pass", 0.7f);
+                    break;
+            }
         }
 
         // =============================================================== input
 
         void Update()
         {
-            if (state == null) return;
-
-            if (Input.GetKeyDown(KeyCode.Escape)) CancelSelection();
+            if (state == null || !InputEnabled) return;
             if (!IsMyTurn || awaitingServer) return;
 
             if (Input.GetKeyDown(KeyCode.Space)) SubmitPass();
@@ -108,7 +200,8 @@ namespace HexQuest
             if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
 
             Vector2 world = cam.ScreenToWorldPoint(Input.mousePosition);
-            if (!grid.TryPick(world, out var coord)) return;
+            HexCoord coord;
+            if (!grid.TryPick(world, out coord)) return;
 
             var type = pending.Value;
             var matches = state.legal_actions.FindAll(a => a.action_type == type && a.target == coord);
@@ -117,13 +210,13 @@ namespace HexQuest
             var chosen = matches[0];
             if (type == ActionType.Attack) chosen = StrongestAttacker(matches);
 
-            // Attacks need a confirming second click on the same hex.
-            if (type == ActionType.Attack && attackTarget != coord)
+            if (type == ActionType.Attack && !(attackTarget.HasValue && attackTarget.Value == coord))
             {
                 attackTarget = coord;
                 HighlightTargets(type);
                 grid.SetHighlight(coord, Highlight.Selected);
-                hud.SetBanner("Click the hex again to CONFIRM the attack");
+                hud.SetBanner("Click again to confirm the attack");
+                AudioManager.PlaySfx("ui_click", 0.8f);
                 return;
             }
             Submit(chosen);
@@ -141,9 +234,8 @@ namespace HexQuest
 
         void OnActionClicked(ActionType type)
         {
-            if (!IsMyTurn || awaitingServer) return;
+            if (!InputEnabled || !IsMyTurn || awaitingServer) return;
 
-            // Instant actions: no target needed.
             if (type == ActionType.Gather || type == ActionType.Upgrade)
             {
                 var a = state.legal_actions.Find(x => x.action_type == type);
@@ -154,9 +246,10 @@ namespace HexQuest
             if (!state.legal_actions.Exists(x => x.action_type == type)) return;
             pending = type;
             attackTarget = null;
+            hud.HideInfo();
             HighlightTargets(type);
-            hud.Refresh(state, conn.LocalPlayerId, pending);
-            hud.SetBanner(type + ": click a highlighted hex   (Esc = cancel)");
+            hud.Refresh(state, Me, pending);
+            hud.SetBanner(type + ": click a glowing hex");
         }
 
         void HighlightTargets(ActionType type)
@@ -172,13 +265,13 @@ namespace HexQuest
             if (state == null) return;
             pending = null; attackTarget = null;
             grid.ClearHighlights();
-            hud.Refresh(state, conn.LocalPlayerId, null);
-            if (IsMyTurn) hud.SetBanner("Your turn - pick an action");
+            hud.Refresh(state, Me, null);
+            if (IsMyTurn) hud.SetBanner("Your turn - choose a deed");
         }
 
         void SubmitPass()
         {
-            if (!IsMyTurn || awaitingServer) return;
+            if (!InputEnabled || !IsMyTurn || awaitingServer) return;
             var a = state.legal_actions.Find(x => x.action_type == ActionType.Pass);
             if (a != null) Submit(a);
         }
@@ -188,13 +281,13 @@ namespace HexQuest
             awaitingServer = true;
             pending = null; attackTarget = null;
             grid.ClearHighlights();
-            hud.SetBanner("Waiting for server...");
+            hud.SetBanner("Awaiting the realm...");
 
             conn.SubmitAction(new ActionRequest
             {
                 match_id = state.match_id,
                 turn_id = state.turn_id,
-                player_id = conn.LocalPlayerId,
+                player_id = Me,
                 action_type = a.action_type,
                 source = a.source,
                 target = a.target,
@@ -203,12 +296,12 @@ namespace HexQuest
             });
         }
 
-        // =============================================================== side buttons / panels
+        // =============================================================== info panels
 
         void FocusOnLeader()
         {
             if (state == null) return;
-            camCtrl.FocusOn(grid.WorldPosition(state.players[conn.LocalPlayerId].leader));
+            camCtrl.FocusOn(grid.WorldPosition(state.players[Me].leader));
         }
 
         List<PlayerData> Standings()
@@ -218,39 +311,36 @@ namespace HexQuest
             return list;
         }
 
+        static string Tag(int id) { return "<color=#" + Palette.Hex(Palette.Darken(Palette.ForPlayer(id), 0.72f)) + ">"; }
+
         void ShowStats()
         {
             if (state == null) return;
+            if (hud.InfoVisible && infoKind == "stats") { hud.HideInfo(); return; }
+            infoKind = "stats";
+            var owned = new int[state.players.Count];
+            foreach (var c in state.cells) if (c.owner >= 0) owned[c.owner]++;
             var sb = new StringBuilder();
             int rank = 1;
             foreach (var p in Standings())
-                sb.AppendLine($"{rank++}. {p.name}   {p.score} pts   (res {p.resources}, Lv {p.gather_level})");
-            sb.AppendLine().Append("Score = 10 per cell + unspent resources.");
-            hud.ShowPanel("Scoreboard", sb.ToString(), null);
+                sb.Append(rank++).Append(".  ").Append(Tag(p.player_id)).Append(p.name).Append("</color>   ")
+                  .Append(p.score).Append(" pts\n      ").Append(owned[p.player_id]).Append(" hexes, ")
+                  .Append(p.resources).Append(" coins, gather Lv ").Append(p.gather_level).Append("\n");
+            sb.Append("\nScore: 10 per hex + 1 per coin.");
+            hud.ShowInfo("Scoreboard", sb.ToString());
         }
 
         void ShowSeats()
         {
             if (state == null) return;
+            if (hud.InfoVisible && infoKind == "seats") { hud.HideInfo(); return; }
+            infoKind = "seats";
             var sb = new StringBuilder();
             foreach (var p in state.players)
-                sb.AppendLine($"Seat {p.player_id + 1}: {p.name}\n    {p.seat_type}  ({p.controller_id})");
-            sb.AppendLine().Append("Takeover / hand-back arrives with SEAT_REQUEST in the real protocol.");
-            hud.ShowPanel("Seats", sb.ToString(), null);
-        }
-
-        void ShowMenu() => hud.ShowPanel("Menu",
-            "Mock match against random agents.\n\nControls:\n1-6  choose action\nSpace  pass\nEsc  cancel\nRight-drag / WASD  pan\nScroll  zoom",
-            "Restart match");
-
-        void ShowGameOver(StateMessage s)
-        {
-            var sb = new StringBuilder();
-            var standings = Standings();
-            sb.AppendLine("Winner: " + standings[0].name + "\n");
-            int rank = 1;
-            foreach (var p in standings) sb.AppendLine($"{rank++}. {p.name}   {p.score} pts");
-            hud.ShowPanel("Game over", sb.ToString(), "Play again");
+                sb.Append(Tag(p.player_id)).Append(p.name).Append("</color>\n      ")
+                  .Append(p.seat_type == SeatType.Human ? "Human" : "AI").Append("  -  ").Append(p.controller_id)
+                  .Append(p.active ? "" : "  (left the quest)").Append("\n");
+            hud.ShowInfo("Seats", sb.ToString());
         }
     }
 }

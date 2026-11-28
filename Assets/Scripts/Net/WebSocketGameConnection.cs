@@ -176,8 +176,9 @@ namespace HexQuest
             }
         }
 
-        void Disconnect()
+        public void Disconnect()
         {
+            session++;
             try
             {
                 cts?.Cancel();

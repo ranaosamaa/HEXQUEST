@@ -7,7 +7,7 @@ from ..agents import make_agent
 from ..engine import apply_action, drop_player, legal_actions, new_game
 from ..rules import PASS, RulesConfig
 from ..runner import PASS_ACTION, request_action
-from .protocol import (describe, parse_action, result_message, state_message, turn_id)
+from .protocol import (parse_action, result_for_action, result_message, state_message, turn_id)
 
 HUMAN_SEAT = 0
 DEFAULT_AGENTS = ["planner", "greedy", "random", "greedy", "random"]
@@ -96,6 +96,5 @@ class MatchSession:
     async def _apply_and_publish(self, seat: int, action: tuple):
         before = self.state.clone()
         info = apply_action(self.state, action)
-        await self.send(result_message(seat, action[0], True,
-                                       describe(before, self.names[seat], action, info, self.names)))
+        await self.send(result_for_action(before, self.names[seat], action, info, self.names))
         await self.push_state()

@@ -2,33 +2,91 @@ using UnityEngine;
 
 namespace HexQuest
 {
-    /// <summary>A player's leader: cyan pedestal + coloured token, like the units in the reference UI.</summary>
+    /// <summary>A player's hero: stone pedestal with a rune ring, armoured knight and a banner in the player's colour.</summary>
     public class LeaderView : MonoBehaviour
     {
-        Vector3 target;
-        bool snap = true;
+        SpriteRenderer pedestal, glow, bodyShadow, body, pole, flag;
+        Transform bob;
+        Color color;
+        Vector3 start, target;
+        float moveT = 1f, phase;
+        bool myTurn, snap = true;
 
-        public void Init(int playerId, Font font)
+        SpriteRenderer Make(Transform parent, string objName, string sprite, float x, float y, float scale, int order)
         {
-            name = "Leader " + (playerId + 1);
-            var hex = ProceduralArt.HexMesh(0.55f);
-            ProceduralArt.MakePart(transform, "PedestalSide", hex, Palette.Darken(Palette.Pedestal, 0.6f), 6, new Vector3(0f, -0.08f, 0f), out _);
-            ProceduralArt.MakePart(transform, "PedestalTop", hex, Palette.Pedestal, 7, Vector3.zero, out _);
-            ProceduralArt.MakePart(transform, "TokenRim", ProceduralArt.CircleMesh(0.27f), Color.white, 8, new Vector3(0f, 0.12f, 0f), out _);
-            ProceduralArt.MakePart(transform, "Token", ProceduralArt.CircleMesh(0.22f), Palette.ForPlayer(playerId), 9, new Vector3(0f, 0.12f, 0f), out _);
-            ProceduralArt.MakeText(transform, "Number", font, (playerId + 1).ToString(), 0.05f, Color.white, 10, new Vector3(0f, 0.12f, 0f));
+            var go = new GameObject(objName);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = new Vector3(x, y, 0f);
+            go.transform.localScale = new Vector3(scale, scale, 1f);
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = Art.Get(sprite);
+            sr.sortingOrder = order;
+            return sr;
         }
+
+        public void Init(int playerId)
+        {
+            name = "Hero " + Palette.NameForPlayer(playerId);
+            color = Palette.ForPlayer(playerId);
+            var root = new GameObject("Bob").transform;
+            root.SetParent(transform, false);
+            bob = root;
+            pedestal = Make(transform, "Pedestal", "pedestal", 0f, 0.06f, 0.62f, 0);
+            glow = Make(transform, "RuneGlow", "pedestal_glow", 0f, 0.06f, 0.62f, 0);
+            glow.color = Palette.WithAlpha(color, 0.5f);
+            body = Make(bob, "Body", "hero_body", -0.06f, -0.10f, 0.60f, 0);
+            pole = Make(bob, "Pole", "hero_pole", 0.20f, -0.10f, 0.60f, 0);
+            flag = Make(bob, "Flag", "hero_flag", 0.20f, -0.10f, 0.60f, 0);
+            flag.color = color;
+            ApplyOrder();
+        }
+
+        void ApplyOrder()
+        {
+            int row = Mathf.RoundToInt(-transform.position.y / 1.5f + 24f) * 8;
+            int b = 203 + row;
+            pedestal.sortingOrder = b;
+            glow.sortingOrder = b + 1;
+            body.sortingOrder = b + 2;
+            pole.sortingOrder = b + 2;
+            flag.sortingOrder = b + 3;
+        }
+
+        public void SetTurn(bool isMyTurn) { myTurn = isMyTurn; }
 
         public void SetTarget(Vector3 worldPos, bool instant)
         {
+            if (instant || snap)
+            {
+                transform.position = worldPos;
+                target = worldPos;
+                moveT = 1f;
+                snap = false;
+                ApplyOrder();
+                return;
+            }
+            if ((worldPos - target).sqrMagnitude < 0.0001f) return;
+            start = transform.position;
             target = worldPos;
-            if (instant || snap) { transform.position = worldPos; snap = false; }
+            moveT = 0f;
         }
 
         void Update()
         {
-            // Cosmetic only: slides toward the position the server already confirmed.
-            transform.position = Vector3.Lerp(transform.position, target, 1f - Mathf.Exp(-12f * Time.deltaTime));
+            phase += Time.unscaledDeltaTime;
+            float hop = 0f;
+            if (moveT < 1f)
+            {
+                moveT = Mathf.Min(1f, moveT + Time.unscaledDeltaTime / 0.42f);
+                float e = moveT * moveT * (3f - 2f * moveT);
+                transform.position = Vector3.Lerp(start, target, e);
+                hop = Mathf.Sin(moveT * Mathf.PI) * 0.28f;
+                ApplyOrder();
+            }
+            float idle = Mathf.Sin(phase * 2.2f) * 0.012f;
+            bob.localPosition = new Vector3(0f, hop + idle, 0f);
+            float a = myTurn ? Mathf.Lerp(0.55f, 1f, 0.5f + 0.5f * Mathf.Sin(phase * 4f)) : 0.45f;
+            glow.color = Palette.WithAlpha(color, a);
         }
     }
 }

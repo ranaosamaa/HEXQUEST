@@ -40,6 +40,8 @@ namespace HexQuest
             Publish();
         }
 
+        public void Disconnect() { StopAllCoroutines(); }
+
         public void SubmitAction(ActionRequest req)
         {
             if (state.game_over) { Reject(req, "match_over"); return; }
@@ -63,7 +65,7 @@ namespace HexQuest
         {
             state = new StateMessage
             {
-                match_id = "mock-" + config.map_seed,
+                match_id = "m" + config.map_seed + "-mock",
                 turn_id = 1, round = 1, max_rounds = config.rounds,
                 active_player = 0, state_revision = 1,
             };
@@ -163,6 +165,8 @@ namespace HexQuest
         void Resolve(PlayerData p, ActionType type, HexCoord src, HexCoord dst)
         {
             string text;
+            int amount = 0, rollA = 0, rollB = 0;
+            bool won = false;
             switch (type)
             {
                 case ActionType.Move:
@@ -195,6 +199,7 @@ namespace HexQuest
                     int atk = RollDice(atkCell.garrison);
                     int def = RollDice(defCell.garrison);
                     bool win = atk > def;                       // ties favour the defender
+                    rollA = atk; rollB = def; won = win;
                     string defender = state.players[defCell.owner].name;
                     if (win)
                     {
@@ -211,6 +216,7 @@ namespace HexQuest
                 {
                     int gain = 1 + p.gather_level + cellMap[p.leader].deposit;
                     p.resources += gain;
+                    amount = gain;
                     text = $"{p.name} gathers +{gain}";
                     break;
                 }
@@ -226,7 +232,11 @@ namespace HexQuest
                     break;
             }
 
-            ResultReceived?.Invoke(new ResultMessage { actor = p.player_id, action_type = type, accepted = true, summary = text });
+            ResultReceived?.Invoke(new ResultMessage
+            {
+                actor = p.player_id, action_type = type, accepted = true, summary = text,
+                target = dst, amount = amount, roll_a = rollA, roll_b = rollB, won = won,
+            });
         }
 
         void AdvanceTurn()

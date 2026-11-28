@@ -12,7 +12,7 @@ CELL_KEYS = {"coord", "owner", "garrison", "deposit", "status"}
 PLAYER_KEYS = {"player_id", "name", "seat_type", "controller_id", "leader", "resources",
                "gather_level", "active", "score"}
 LEGAL_KEYS = {"action_type", "source", "target", "cost"}
-RESULT_KEYS = {"type", "actor", "action_type", "accepted", "error", "summary"}
+RESULT_KEYS = {"type", "actor", "action_type", "accepted", "error", "summary", "target", "amount", "roll_a", "roll_b", "won"}
 
 
 @pytest.fixture
@@ -141,3 +141,19 @@ def test_no_hidden_information_leaks(client):
         blob = str(st)
         for secret in ("schedule", "rng", "dice", "seed"):
             assert secret not in blob
+
+
+def test_result_messages_carry_effect_data(client):
+    with client.websocket_connect("/ws") as ws:
+        start(ws)
+        _, st = read_until_my_turn(ws)
+        gather = next(l for l in st["legal_actions"] if l["action_type"] == 4)
+        ws.send_json(action_from(st, gather))
+        res = ws.receive_json()
+        assert res["accepted"] and res["action_type"] == 4 and res["amount"] >= 1
+        me = st["players"][0]["leader"]
+        assert res["target"] == me                      # gathering happens under the hero
+        while True:                                     # an agent's attack reports dice and outcome
+            m = ws.receive_json()
+            if m["type"] == "STATE" and m["active_player"] == 0:
+                break

@@ -6,253 +6,282 @@ using UnityEngine.UI;
 namespace HexQuest
 {
     /// <summary>
-    /// Builds and updates the whole HUD, laid out like the reference screenshot:
-    /// name + resource panels (top centre), stats/menu buttons (top right), turn-order hexes,
-    /// action bar (bottom centre), big round Pass button (bottom right), event feed (bottom left).
-    /// It only DISPLAYS state and raises events - GameController decides what happens.
+    /// In-game HUD built from the fantasy UI art. It only DISPLAYS state and raises events;
+    /// GameController decides what happens.
     /// </summary>
     public class HudController : MonoBehaviour
     {
         public static readonly ActionType[] CardOrder =
             { ActionType.Move, ActionType.Claim, ActionType.Reinforce, ActionType.Attack, ActionType.Gather, ActionType.Upgrade };
-        static readonly string[] CardColors = { "#3FA7D6", "#59C23A", "#D79A22", "#D6483F", "#8A5BE0", "#2FB59B" };
+        static readonly string[] CardLabels = { "Move", "Claim", "Reinforce", "Attack", "Gather", "Upgrade" };
+        static readonly string[] CardIcons = { "move", "claim", "reinforce", "attack", "gather", "upgrade" };
+        static readonly string[] CardColors = { "#3FA7D6", "#4FB04A", "#D79A22", "#D6483F", "#8A5BE0", "#2FB59B" };
+        static readonly string[] CardTips =
+        {
+            "Move your hero to a neighbouring hex.",
+            "Spend resources to claim a neutral hex next to your land.",
+            "Add one soldier to a hex you own.",
+            "Strike an adjacent enemy hex. Dice decide; ties favour the defender.",
+            "Collect resources where your hero stands. Deposits and upgrades add more.",
+            "Spend resources to gather more every time you gather.",
+        };
 
         public event Action<ActionType> ActionClicked;
-        public event Action PassClicked, CancelClicked, FocusClicked, StatsClicked, SeatsClicked, MenuClicked, PanelButtonClicked;
+        public event Action PassClicked, CancelClicked, FocusClicked, StatsClicked, SeatsClicked, MenuClicked;
 
         sealed class Card
         {
-            public Button button;
-            public Image border, face;
+            public UiButton button;
+            public Image face;
             public Color faceColor;
             public GameObject chip;
-            public Text costText;
+            public Text cost;
         }
 
         readonly List<Card> cards = new List<Card>();
-        readonly List<RectTransform> turnRings = new List<RectTransform>();
-        readonly List<Image> turnRingImages = new List<Image>();
+        readonly List<RectTransform> turnHexes = new List<RectTransform>();
+        readonly List<Image> turnFaces = new List<Image>();
+        readonly List<Image> turnRims = new List<Image>();
         readonly List<string> feed = new List<string>();
 
-        Text nameText, subText, coinText, territoryText, bannerText, feedText;
-        Text sideTitle, sideBody, sideButtonLabel;
-        Button passButton, cancelButton, sideButton;
-        RectTransform turnRow, sidePanel;
+        RectTransform root, turnRow, infoPanel, progressFill;
+        Text nameText, subText, coinText, landText, roundText, bannerText, tipText, feedText, infoTitle, infoBody;
+        Image portraitFace;
+        UiButton passButton, cancelButton;
+        CanvasGroup group;
+        float coinShown, coinGoal, landShown, landGoal;
+        float bannerPop;
 
-        static readonly Vector2 TopCenter = new Vector2(0.5f, 1f);
-        static readonly Vector2 Center = new Vector2(0.5f, 0.5f);
+        public bool InfoVisible { get { return infoPanel.gameObject.activeSelf; } }
 
         // =================================================================== build
 
-        public void Build()
+        public void Build(Transform canvasRoot)
         {
-            var canvasGo = new GameObject("Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
-            canvasGo.transform.SetParent(transform, false);
-            var canvas = canvasGo.GetComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            var scaler = canvasGo.GetComponent<CanvasScaler>();
-            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920f, 1080f);
-            scaler.matchWidthOrHeight = 0.5f;
-
-            var root = canvasGo.transform;
-            BuildTopBar(root);
-            BuildTurnRow(root);
-            BuildActionBar(root);
-            BuildCornerControls(root);
-            BuildFeedAndBanner(root);
-            BuildSidePanel(root);
+            root = UIKit.NewRect("HUD", canvasRoot).Stretch();
+            group = root.gameObject.AddComponent<CanvasGroup>();
+            BuildPlayerPlate();
+            BuildTurnRow();
+            BuildResources();
+            BuildActionBar();
+            BuildCorners();
+            BuildFeedAndBanner();
+            BuildInfoPanel();
+            root.gameObject.SetActive(false);
         }
 
-        void BuildTopBar(Transform root)
+        public void Show(bool visible) { root.gameObject.SetActive(visible); }
+        public void SetInteractable(bool on) { group.blocksRaycasts = on; }
+
+        void BuildPlayerPlate()
         {
-            // Name panel (left of centre)
-            var nameInner = UIKit.MetalPanel(root, "NamePanel", out var nameOuter);
-            nameOuter.Place(TopCenter, new Vector2(1f, 1f), new Vector2(-8f, -14f), new Vector2(580f, 100f));
-            nameText = UIKit.AddText(nameInner, "", 38, Color.white);
-            nameText.rectTransform.Band(0.45f, 1f);
-            subText = UIKit.AddText(nameInner, "", 22, new Color(0.75f, 0.8f, 1f), TextAnchor.MiddleCenter, FontStyle.Normal);
-            subText.rectTransform.Band(0f, 0.5f);
+            var plate = UIKit.Panel(root, "PlayerPlate");
+            plate.Place(UIKit.TL, UIKit.TL, new Vector2(24f, -20f), new Vector2(470f, 124f));
+            var hexBox = UIKit.NewRect("Portrait", plate).Place(UIKit.ML, UIKit.ML, new Vector2(24f, 0f), new Vector2(92f, 106f));
+            UIKit.Img(hexBox, "ui_hex_rim", Color.white, false);
+            var face = UIKit.NewRect("Face", hexBox).Stretch();
+            portraitFace = UIKit.Img(face, "ui_hex_face", Palette.Players[0], false);
+            UIKit.Icon(hexBox, "crown", Color.white, 46f, UIKit.MC, Vector2.zero);
 
-            // Resource panel (right of centre): coin = resources, green ring = territory
-            var resInner = UIKit.MetalPanel(root, "ResourcePanel", out var resOuter);
-            resOuter.Place(TopCenter, new Vector2(0f, 1f), new Vector2(8f, -14f), new Vector2(440f, 100f));
-
-            var coin = UIKit.NewRect("Coin", resInner).Place(new Vector2(0f, 0.5f), Center, new Vector2(50f, 0f), new Vector2(60f, 60f));
-            coin.AddImage(ProceduralArt.Circle(), Palette.Gold).raycastTarget = false;
-            var coinCore = UIKit.NewRect("Core", coin).Stretch(12f);
-            coinCore.AddImage(ProceduralArt.Circle(), Palette.GoldDark).raycastTarget = false;
-            coinText = UIKit.AddText(resInner, "0", 42, Color.white, TextAnchor.MiddleLeft);
-            coinText.rectTransform.Place(new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(92f, 0f), new Vector2(120f, 70f));
-
-            var ring = UIKit.NewRect("Territory", resInner).Place(new Vector2(0f, 0.5f), Center, new Vector2(250f, 0f), new Vector2(60f, 60f));
-            ring.AddImage(ProceduralArt.Circle(), Palette.Green).raycastTarget = false;
-            var ringCore = UIKit.NewRect("Core", ring).Stretch(13f);
-            ringCore.AddImage(ProceduralArt.Circle(), Palette.Panel).raycastTarget = false;
-            territoryText = UIKit.AddText(resInner, "0", 42, Color.white, TextAnchor.MiddleLeft);
-            territoryText.rectTransform.Place(new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(292f, 0f), new Vector2(120f, 70f));
-
-            // Stats + menu (top right)
-            var stats = UIKit.RoundButton(root, "StatsButton", "Stats", 20, Palette.Panel);
-            ((RectTransform)stats.transform).Place(new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-110f, -18f), new Vector2(84f, 84f));
-            stats.onClick.AddListener(() => StatsClicked?.Invoke());
-            var menu = UIKit.RoundButton(root, "MenuButton", "Menu", 20, Palette.Panel);
-            ((RectTransform)menu.transform).Place(new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-18f, -18f), new Vector2(84f, 84f));
-            menu.onClick.AddListener(() => MenuClicked?.Invoke());
+            nameText = UIKit.AddText(plate, "", 40, Palette.Cream, TextAnchor.MiddleLeft, false).Shadow();
+            nameText.rectTransform.StretchXY(136f, 58f, 20f, 14f);
+            subText = UIKit.AddText(plate, "", 26, Palette.Dim, TextAnchor.MiddleLeft).Shadow(1.5f);
+            subText.rectTransform.StretchXY(136f, 18f, 20f, 70f);
         }
 
-        void BuildTurnRow(Transform root)
+        void BuildTurnRow()
         {
-            turnRow = UIKit.NewRect("TurnOrder", root);
-            turnRow.Place(TopCenter, new Vector2(0.5f, 1f), new Vector2(0f, -128f), new Vector2(700f, 96f));
+            turnRow = UIKit.NewRect("TurnOrder", root).Place(UIKit.TC, UIKit.TC, new Vector2(0f, -22f), new Vector2(620f, 100f));
+            roundText = UIKit.AddText(root, "", 30, Palette.Cream, TextAnchor.MiddleCenter, false).Shadow();
+            roundText.rectTransform.Place(UIKit.TC, UIKit.TC, new Vector2(0f, -122f), new Vector2(520f, 34f));
+
+            var track = UIKit.NewRect("RoundBar", root).Place(UIKit.TC, UIKit.TC, new Vector2(0f, -160f), new Vector2(420f, 24f));
+            UIKit.Img(track, "ui_slider_track", Color.white, false);
+            progressFill = UIKit.NewRect("Fill", track);
+            UIKit.Img(progressFill, "ui_slider_fill", Color.white, false);
+            progressFill.anchorMin = new Vector2(0f, 0f);
+            progressFill.anchorMax = new Vector2(0f, 1f);
+            progressFill.pivot = new Vector2(0f, 0.5f);
+            progressFill.anchoredPosition = new Vector2(5f, 0f);
+            progressFill.sizeDelta = new Vector2(10f, -10f);
         }
 
-        void BuildActionBar(Transform root)
+        void BuildResources()
         {
-            var inner = UIKit.MetalPanel(root, "ActionBar", out var outer);
-            outer.Place(new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(-110f, 12f), new Vector2(800f, 150f));
+            var plate = UIKit.Panel(root, "ResourcePlate");
+            plate.Place(UIKit.TR, UIKit.TR, new Vector2(-236f, -20f), new Vector2(410f, 104f));
+            var coin = UIKit.NewRect("Coin", plate).Place(UIKit.ML, UIKit.MC, new Vector2(60f, 0f), new Vector2(66f, 66f));
+            UIKit.Img(coin, "coin", Color.white, false);
+            coinText = UIKit.AddText(plate, "0", 48, Palette.Cream, TextAnchor.MiddleLeft, false).Shadow();
+            coinText.rectTransform.StretchXY(104f, 0f, 200f, 0f);
+            var land = UIKit.NewRect("Land", plate).Place(UIKit.ML, UIKit.MC, new Vector2(232f, 0f), new Vector2(60f, 60f));
+            UIKit.Img(land, "icon_territory", Palette.Good, false);
+            landText = UIKit.AddText(plate, "0", 48, Palette.Cream, TextAnchor.MiddleLeft, false).Shadow();
+            landText.rectTransform.StretchXY(274f, 0f, 10f, 0f);
 
-            string[] labels = { "Move", "Claim", "Reinforce", "Attack", "Gather", "Upgrade" };
-            float[] xs = { 20f, 140f, 260f, 380f, 540f, 660f };   // gap before index 4 holds the divider
+            var stats = UIKit.RoundButton(root, "Stats", "stats", () => { if (StatsClicked != null) StatsClicked(); }, 98f, new Color(0, 0, 0, 0));
+            ((RectTransform)stats.transform).Place(UIKit.TR, UIKit.TR, new Vector2(-126f, -20f), new Vector2(98f, 98f));
+            stats.Tip = "Scoreboard";
+            WireTip(stats);
+            var menu = UIKit.RoundButton(root, "Menu", "menu", () => { if (MenuClicked != null) MenuClicked(); }, 98f, new Color(0, 0, 0, 0));
+            ((RectTransform)menu.transform).Place(UIKit.TR, UIKit.TR, new Vector2(-20f, -20f), new Vector2(98f, 98f));
+            menu.Tip = "Menu (Esc)";
+            WireTip(menu);
+        }
+
+        void BuildActionBar()
+        {
+            var bar = UIKit.Panel(root, "ActionBar");
+            bar.Place(UIKit.BC, UIKit.BC, new Vector2(-40f, 16f), new Vector2(846f, 180f));
+            float[] xs = { 28f, 150f, 272f, 394f, 566f, 688f };
             for (int i = 0; i < CardOrder.Length; i++)
             {
-                ColorUtility.TryParseHtmlString(CardColors[i], out var color);
                 var type = CardOrder[i];
-                var card = MakeCard(inner, labels[i], color, xs[i]);
-                card.button.onClick.AddListener(() => ActionClicked?.Invoke(type));
+                Color col;
+                ColorUtility.TryParseHtmlString(CardColors[i], out col);
+                var card = MakeCard(bar, i, col, xs[i]);
+                card.button.Clicked = () => { if (ActionClicked != null) ActionClicked(type); };
                 cards.Add(card);
             }
-
-            // Diamond divider between targeted actions and instant actions
-            var diamond = UIKit.NewRect("Divider", inner).Place(new Vector2(0f, 0.5f), Center, new Vector2(514f, 0f), new Vector2(14f, 14f));
-            diamond.AddImage(null, Palette.Silver).raycastTarget = false;
-            diamond.localRotation = Quaternion.Euler(0f, 0f, 45f);
+            var divider = UIKit.NewRect("Divider", bar).Place(UIKit.ML, UIKit.MC, new Vector2(537f, 0f), new Vector2(18f, 18f));
+            UIKit.Img(divider, "ui_hex_face", Palette.Gold, false);
         }
 
-        Card MakeCard(Transform parent, string label, Color color, float x)
+        Card MakeCard(Transform parent, int index, Color color, float x)
         {
-            var rt = UIKit.NewRect("Card " + label, parent)
-                .Place(new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(x, 0f), new Vector2(108f, 122f));
+            var rt = UIKit.NewRect("Card " + CardLabels[index], parent)
+                .Place(UIKit.ML, UIKit.ML, new Vector2(x, 0f), new Vector2(112f, 144f));
             var c = new Card { faceColor = color };
-            c.border = rt.AddImage(ProceduralArt.RoundedRect(), Palette.Silver);
 
-            var face = UIKit.NewRect("Face", rt).Stretch(4f);
-            c.face = face.AddImage(ProceduralArt.RoundedRect(), color);
-            c.face.raycastTarget = false;
-            var text = UIKit.AddText(face, label, 22, Color.white);
-            text.rectTransform.Band(0.32f, 1f);
-            UIKit.AddOutline(text);
+            var faceRt = UIKit.NewRect("Face", rt).Stretch(7f);
+            c.face = UIKit.Img(faceRt, "ui_face", color, false);
+            var frame = UIKit.Img(UIKit.NewRect("Frame", rt).Stretch(), "ui_card_frame", Color.white);
+            c.button = rt.gameObject.AddComponent<UiButton>();
+            c.button.Target = frame;
+            c.button.HoverScale = 1.07f;
+            c.button.Tip = CardTips[index];
+            WireTip(c.button);
 
-            // Cost chip (gold coin + number), like the price tags in the reference
-            var chip = UIKit.NewRect("Chip", rt).Place(new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 9f), new Vector2(88f, 30f));
-            chip.AddImage(ProceduralArt.RoundedRect(), Palette.Panel).raycastTarget = false;
-            var coin = UIKit.NewRect("Coin", chip).Place(new Vector2(0f, 0.5f), Center, new Vector2(16f, 0f), new Vector2(20f, 20f));
-            coin.AddImage(ProceduralArt.Circle(), Palette.Gold).raycastTarget = false;
-            c.costText = UIKit.AddText(chip, "0", 20, Color.white);
-            c.costText.rectTransform.offsetMin = new Vector2(30f, 0f);
+            UIKit.Icon(rt, CardIcons[index], Palette.Cream, 64f, UIKit.TC, new Vector2(0f, -22f));
+            var label = UIKit.AddText(rt, CardLabels[index], 19, Palette.Cream, TextAnchor.MiddleCenter, true).Shadow(1.5f);
+            label.rectTransform.StretchXY(2f, 38f, 2f, 92f);
+            var key = UIKit.AddText(rt, (index + 1).ToString(), 22, new Color(1f, 1f, 1f, 0.8f), TextAnchor.UpperLeft, false).Shadow(1.5f);
+            key.rectTransform.StretchXY(14f, 0f, 0f, 12f);
+
+            var chip = UIKit.NewRect("Chip", rt).Place(UIKit.BC, UIKit.BC, new Vector2(0f, 10f), new Vector2(86f, 32f));
+            UIKit.Img(chip, "ui_chip", Color.white, false);
+            var coin = UIKit.NewRect("Coin", chip).Place(UIKit.ML, UIKit.MC, new Vector2(18f, 0f), new Vector2(24f, 24f));
+            UIKit.Img(coin, "coin", Color.white, false);
+            c.cost = UIKit.AddText(chip, "0", 22, Palette.Cream, TextAnchor.MiddleCenter, false);
+            c.cost.rectTransform.offsetMin = new Vector2(28f, 0f);
             c.chip = chip.gameObject;
-
-            c.button = rt.gameObject.AddComponent<Button>();
-            c.button.targetGraphic = c.border;
             return c;
         }
 
-        void BuildCornerControls(Transform root)
+        void BuildCorners()
         {
-            // Big round Pass button (the ">>" end-turn button in the reference)
-            passButton = UIKit.RoundButton(root, "PassButton", ">>", 70, Palette.Purple);
-            var passRt = (RectTransform)passButton.transform;
-            passRt.Place(new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-22f, 22f), new Vector2(190f, 190f));
-            passRt.GetComponentInChildren<Text>().rectTransform.Band(0.3f, 0.92f);
-            var passLabel = UIKit.AddText(passRt, "PASS", 22, Color.white);
-            passLabel.rectTransform.Band(0.1f, 0.34f);
-            passButton.onClick.AddListener(() => PassClicked?.Invoke());
+            var empty = new Color(0, 0, 0, 0);
+            passButton = UIKit.RoundButton(root, "Pass", "pass", () => { if (PassClicked != null) PassClicked(); }, 200f, Palette.Purple, "PASS");
+            ((RectTransform)passButton.transform).Place(UIKit.BR, UIKit.BR, new Vector2(-26f, 26f), new Vector2(200f, 200f));
+            passButton.Tip = "End your turn without acting (Space).";
+            WireTip(passButton);
 
-            // Cancel (the undo button in the reference)
-            cancelButton = UIKit.RoundButton(root, "CancelButton", "Cancel", 18, Palette.Panel);
-            ((RectTransform)cancelButton.transform).Place(new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-232f, 30f), new Vector2(92f, 92f));
-            cancelButton.onClick.AddListener(() => CancelClicked?.Invoke());
+            cancelButton = UIKit.RoundButton(root, "Cancel", "cancel", () => { if (CancelClicked != null) CancelClicked(); }, 96f, empty);
+            ((RectTransform)cancelButton.transform).Place(UIKit.BR, UIKit.BR, new Vector2(-246f, 30f), new Vector2(96f, 96f));
+            cancelButton.Tip = "Cancel the selected action (Esc).";
+            WireTip(cancelButton);
 
-            // Vertical side stack: Focus + Seats (the castle / sleep buttons in the reference)
-            var inner = UIKit.MetalPanel(root, "SideStack", out var outer);
-            outer.Place(new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(0f, 230f), new Vector2(112f, 240f));
-            var focus = UIKit.RoundButton(inner, "FocusButton", "Focus", 20, Palette.Panel);
-            ((RectTransform)focus.transform).Place(new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -14f), new Vector2(84f, 84f));
-            focus.onClick.AddListener(() => FocusClicked?.Invoke());
-            var seats = UIKit.RoundButton(inner, "SeatsButton", "Seats", 20, Palette.Panel);
-            ((RectTransform)seats.transform).Place(new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -112f), new Vector2(84f, 84f));
-            seats.onClick.AddListener(() => SeatsClicked?.Invoke());
+            var focus = UIKit.RoundButton(root, "Focus", "focus", () => { if (FocusClicked != null) FocusClicked(); }, 92f, empty);
+            ((RectTransform)focus.transform).Place(UIKit.BR, UIKit.BR, new Vector2(-30f, 250f), new Vector2(92f, 92f));
+            focus.Tip = "Centre the camera on your hero.";
+            WireTip(focus);
+
+            var seats = UIKit.RoundButton(root, "Seats", "seats", () => { if (SeatsClicked != null) SeatsClicked(); }, 92f, empty);
+            ((RectTransform)seats.transform).Place(UIKit.BR, UIKit.BR, new Vector2(-30f, 352f), new Vector2(92f, 92f));
+            seats.Tip = "Who controls each seat.";
+            WireTip(seats);
         }
 
-        void BuildFeedAndBanner(Transform root)
+        void BuildFeedAndBanner()
         {
-            feedText = UIKit.AddText(root, "", 22, Color.white, TextAnchor.LowerLeft, FontStyle.Bold);
-            feedText.rectTransform.Place(new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(24f, 24f), new Vector2(410f, 300f));
-            UIKit.AddOutline(feedText);
+            feedText = UIKit.AddText(root, "", 24, Palette.Cream, TextAnchor.LowerLeft, false).Shadow();
+            feedText.rectTransform.Place(UIKit.BL, UIKit.BL, new Vector2(30f, 30f), new Vector2(480f, 300f));
 
-            bannerText = UIKit.AddText(root, "", 30, Color.white);
-            bannerText.rectTransform.Place(TopCenter, new Vector2(0.5f, 1f), new Vector2(0f, -232f), new Vector2(1000f, 50f));
-            UIKit.AddOutline(bannerText);
+            bannerText = UIKit.AddText(root, "", 38, Color.white, TextAnchor.MiddleCenter, false).Shadow(2.5f);
+            bannerText.rectTransform.Place(UIKit.TC, UIKit.TC, new Vector2(0f, -200f), new Vector2(1200f, 56f));
+
+            tipText = UIKit.AddText(root, "", 26, Palette.Gold, TextAnchor.MiddleCenter, false).Shadow();
+            tipText.rectTransform.Place(UIKit.BC, UIKit.BC, new Vector2(-40f, 204f), new Vector2(1000f, 40f));
         }
 
-        void BuildSidePanel(Transform root)
+        void BuildInfoPanel()
         {
-            var inner = UIKit.MetalPanel(root, "InfoPanel", out sidePanel);
-            sidePanel.Place(new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-140f, 20f), new Vector2(480f, 480f));
-            sideTitle = UIKit.AddText(inner, "", 36, Color.white);
-            sideTitle.rectTransform.Band(0.86f, 1f);
-            sideBody = UIKit.AddText(inner, "", 24, Color.white, TextAnchor.UpperLeft, FontStyle.Normal);
-            sideBody.rectTransform.Band(0.2f, 0.86f);
-            sideBody.rectTransform.offsetMin = new Vector2(24f, 0f);
-            sideBody.rectTransform.offsetMax = new Vector2(-24f, 0f);
+            infoPanel = UIKit.Panel(root, "InfoPanel", "ui_panel_parchment");
+            infoPanel.Place(UIKit.MR, UIKit.MR, new Vector2(-150f, 30f), new Vector2(560f, 560f));
+            infoTitle = UIKit.AddText(infoPanel, "", 40, Palette.Ink, TextAnchor.MiddleCenter, true);
+            infoTitle.rectTransform.StretchXY(40f, 460f, 40f, 40f);
+            infoBody = UIKit.AddText(infoPanel, "", 28, Palette.Ink, TextAnchor.UpperLeft, false);
+            infoBody.rectTransform.StretchXY(50f, 70f, 50f, 120f);
+            var close = UIKit.Button(infoPanel, "Close", "Close", HideInfo, true, 28);
+            ((RectTransform)close.transform).Place(UIKit.BC, UIKit.BC, new Vector2(0f, 30f), new Vector2(220f, 70f));
+            infoPanel.gameObject.SetActive(false);
+        }
 
-            var btn = UIKit.NewRect("PanelButton", inner).Place(new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 18f), new Vector2(300f, 62f));
-            var img = btn.AddImage(ProceduralArt.RoundedRect(), Palette.Purple);
-            sideButton = btn.gameObject.AddComponent<Button>();
-            sideButton.targetGraphic = img;
-            sideButtonLabel = UIKit.AddText(btn, "", 26, Color.white);
-            sideButton.onClick.AddListener(() => PanelButtonClicked?.Invoke());
-            sidePanel.gameObject.SetActive(false);
+        void WireTip(UiButton b)
+        {
+            b.HoverChanged = on => tipText.text = on ? b.Tip : "";
         }
 
         // =================================================================== public API
 
-        public bool PanelVisible => sidePanel.gameObject.activeSelf;
-
-        public void ShowPanel(string title, string body, string buttonLabel)
+        public void ShowInfo(string title, string body)
         {
-            sideTitle.text = title;
-            sideBody.text = body;
-            sideButton.gameObject.SetActive(buttonLabel != null);
-            if (buttonLabel != null) sideButtonLabel.text = buttonLabel;
-            sidePanel.gameObject.SetActive(true);
+            infoTitle.text = title;
+            infoBody.text = body;
+            infoPanel.gameObject.SetActive(true);
         }
 
-        public void HidePanel() => sidePanel.gameObject.SetActive(false);
-        public void SetBanner(string text) => bannerText.text = text;
+        public void HideInfo() { infoPanel.gameObject.SetActive(false); }
+
+        public void SetBanner(string text, bool pop = false)
+        {
+            bannerText.text = text;
+            if (pop) bannerPop = 1f;
+        }
 
         public void AddFeed(string line, bool isError = false)
         {
-            feed.Add(isError ? "<color=#FF8A8A>" + line + "</color>" : line);
-            if (feed.Count > 8) feed.RemoveAt(0);
-            feedText.text = string.Join("\n", feed);
+            feed.Add(isError ? "<color=#" + Palette.Hex(Palette.Danger) + ">" + line + "</color>" : line);
+            if (feed.Count > 7) feed.RemoveAt(0);
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < feed.Count; i++)
+            {
+                if (i > 0) sb.Append('\n');
+                float a = Mathf.Lerp(0.35f, 1f, (i + 1f) / feed.Count);
+                sb.Append("<color=#F6E7C1").Append(Mathf.RoundToInt(a * 255f).ToString("X2")).Append('>').Append(feed[i]).Append("</color>");
+            }
+            feedText.text = sb.ToString();
         }
 
-        public void ClearFeed() { feed.Clear(); feedText.text = ""; }
+        public void ClearFeed() { feed.Clear(); feedText.text = ""; tipText.text = ""; bannerText.text = ""; }
 
         public void Refresh(StateMessage s, int localId, ActionType? activeAction)
         {
             var me = s.players[localId];
             bool myTurn = !s.game_over && s.active_player == localId;
+            var actor = s.active_player >= 0 ? s.players[s.active_player] : me;
 
-            nameText.text = s.game_over ? "Match over"
-                          : (s.active_player == localId ? "Your turn" : s.players[s.active_player].name + "'s turn");
-            subText.text = $"Round {Mathf.Min(s.round, s.max_rounds)}/{s.max_rounds}   |   Gather Lv {me.gather_level}   |   Score {me.score}";
+            portraitFace.color = Palette.ForPlayer(actor.player_id);
+            nameText.text = s.game_over ? "Quest complete" : (s.active_player == localId ? "Your turn" : actor.name + "'s turn");
+            subText.text = "Gather Lv " + me.gather_level + "   Score " + me.score;
+            roundText.text = "ROUND " + Mathf.Min(s.round, s.max_rounds) + " / " + s.max_rounds;
+            float frac = Mathf.Clamp01((s.round - 1f) / Mathf.Max(1, s.max_rounds));
+            progressFill.sizeDelta = new Vector2(Mathf.Max(10f, 400f * frac), -10f);
 
             int owned = 0;
             foreach (var c in s.cells) if (c.owner == localId) owned++;
-            coinText.text = me.resources.ToString();
-            territoryText.text = owned.ToString();
+            coinGoal = me.resources;
+            landGoal = owned;
 
             for (int i = 0; i < cards.Count; i++)
             {
@@ -260,42 +289,57 @@ namespace HexQuest
                 var legal = s.legal_actions.Find(a => a.action_type == type);
                 bool available = myTurn && legal != null;
                 var card = cards[i];
-                card.button.interactable = available;
-                card.face.color = available ? card.faceColor : Color.Lerp(card.faceColor, new Color(0.35f, 0.37f, 0.45f), 0.8f);
-                card.border.color = (activeAction.HasValue && activeAction.Value == type) ? Palette.Gold : Palette.Silver;
+                card.button.Interactable = available;
+                card.face.color = available ? card.faceColor : Color.Lerp(card.faceColor, new Color(0.3f, 0.3f, 0.36f), 0.82f);
+                card.button.Tint = (activeAction.HasValue && activeAction.Value == type) ? Palette.Lighten(Palette.Gold, 0.15f) : Color.white;
                 card.chip.SetActive(available && legal.cost > 0);
-                if (available) card.costText.text = legal.cost.ToString();
+                if (available) card.cost.text = legal.cost.ToString();
             }
 
-            passButton.interactable = myTurn;
-            cancelButton.interactable = activeAction.HasValue;
+            passButton.Interactable = myTurn;
+            cancelButton.Interactable = activeAction.HasValue;
             RefreshTurnRow(s);
         }
 
         void RefreshTurnRow(StateMessage s)
         {
             int n = s.players.Count;
-            if (turnRings.Count != n)
+            if (turnHexes.Count != n)
             {
-                foreach (var r in turnRings) if (r) Destroy(r.gameObject);
-                turnRings.Clear(); turnRingImages.Clear();
+                foreach (var r in turnHexes) if (r != null) Destroy(r.gameObject);
+                turnHexes.Clear(); turnFaces.Clear(); turnRims.Clear();
                 for (int i = 0; i < n; i++)
                 {
-                    float x = (i - (n - 1) / 2f) * 82f;
-                    var ring = UIKit.NewRect("Seat " + (i + 1), turnRow).Place(Center, Center, new Vector2(x, 0f), new Vector2(80f, 80f));
-                    var ringImg = ring.AddImage(ProceduralArt.HexUi(), Palette.Silver);
-                    ringImg.raycastTarget = false;
-                    var fill = UIKit.NewRect("Fill", ring).Stretch(8f);
-                    fill.AddImage(ProceduralArt.HexUi(), Palette.ForPlayer(i)).raycastTarget = false;
-                    UIKit.AddText(fill, (i + 1).ToString(), 28, Color.white);
-                    turnRings.Add(ring); turnRingImages.Add(ringImg);
+                    float x = (i - (n - 1) / 2f) * 84f;
+                    var hex = UIKit.NewRect("Seat " + (i + 1), turnRow).Place(UIKit.MC, UIKit.MC, new Vector2(x, 0f), new Vector2(78f, 90f));
+                    var rim = UIKit.Img(hex, "ui_hex_rim", Color.white, false);
+                    var face = UIKit.Img(UIKit.NewRect("Face", hex).Stretch(), "ui_hex_face", Palette.ForPlayer(i), false);
+                    UIKit.AddText(hex, (i + 1).ToString(), 32, Color.white, TextAnchor.MiddleCenter, false).Shadow();
+                    turnHexes.Add(hex); turnFaces.Add(face); turnRims.Add(rim);
                 }
             }
             for (int i = 0; i < n; i++)
             {
                 bool active = i == s.active_player;
-                turnRingImages[i].color = active ? Palette.Gold : Palette.Silver;
-                turnRings[i].localScale = Vector3.one * (active ? 1.25f : 0.9f);
+                bool alive = s.players[i].active;
+                turnHexes[i].localScale = Vector3.one * (active ? 1.22f : 0.88f);
+                turnRims[i].color = active ? Palette.Lighten(Palette.Gold, 0.2f) : new Color(0.7f, 0.7f, 0.7f);
+                turnFaces[i].color = alive ? Palette.ForPlayer(i) : new Color(0.3f, 0.3f, 0.3f);
+            }
+        }
+
+        void Update()
+        {
+            float dt = Time.unscaledDeltaTime;
+            coinShown = Mathf.MoveTowards(coinShown, coinGoal, Mathf.Max(8f, Mathf.Abs(coinGoal - coinShown) * 6f) * dt);
+            landShown = Mathf.MoveTowards(landShown, landGoal, Mathf.Max(8f, Mathf.Abs(landGoal - landShown) * 6f) * dt);
+            if (coinText != null) coinText.text = Mathf.RoundToInt(coinShown).ToString();
+            if (landText != null) landText.text = Mathf.RoundToInt(landShown).ToString();
+            if (bannerPop > 0f && bannerText != null)
+            {
+                bannerPop = Mathf.Max(0f, bannerPop - dt * 3f);
+                float s = 1f + 0.18f * bannerPop * bannerPop;
+                bannerText.transform.localScale = new Vector3(s, s, 1f);
             }
         }
     }
